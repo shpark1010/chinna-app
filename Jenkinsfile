@@ -1,40 +1,56 @@
 pipeline {
     agent any
-
-    stages {
-        
-        stage('Maven Build') {
-            steps {
-                sh "mvn clean package"
-            }
-        }
-        
-        stage('Docker Build') {
-            steps {
-                sh "docker build . -t chinnareddaiah/hiring:${commit_id()}"
-            }
-        }
-        stage('Docker Push') {
-            steps {
-                withCredentials([string(credentialsId: 'docker-hub', variable: 'hubPwd')]) {
-                    sh "docker login -u chinnareddaiah -p ${hubPwd}"
-                    sh "docker push chinnareddaiah/hiring:${commit_id()}"
-                }
-            }
-        }
-        stage('Docker Deploy') {
-            steps {
-                sshagent(['docker-host']) {
-                    sh "ssh -o StrictHostKeyChecking=no  ec2-user@172.31.36.37 docker rm -f hiring"
-                    sh "ssh  ec2-user@172.31.36.37 docker run -d -p 8080:8080 --name hiring chinnareddaiah/hiring:${commit_id()}"
-                }
-            }
-        }
-
+    tools {
+        maven 'maven'
     }
-}
+    stages {
+        stage('Git Checkout') {
+            steps {
+                git url: 'https://github.com/shpark1010/chinna-app.git', branch: 'main'
+            }
+        }
+        stage('Build Maven Application') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+        stage('Generate SonarQube-Analysis') {
+            steps {
+                withSonarQubeEnv(installationName: 'sonarqube-9', credentialsId: 'jenkins-sonar-token') {
+                    sh 'mvn sonar:sonar'
+                }
+            }
+        }
+        stage('Upload War file to Nexus') {
+            steps {
+                script {
+                    // Obtain the Jenkins build number
+                    def buildNumber = currentBuild.number
 
-def commit_id(){
-    id = sh returnStdout: true, script: 'git rev-parse HEAD'
-    return id
+                    // Use the build number in your version
+                    def versionNumber = "${buildNumber}"
+
+                    // Print the version for reference
+                    echo "Version: ${versionNumber}"
+
+                    // Upload the artifact to Nexus
+                    nexusArtifactUploader artifacts:[
+                        [
+                            artifactId:'hiring',
+                            classifier:'',
+                            file: "target/hiring.war",
+                            type: 'war'
+                        ]
+                    ],
+                    credentialsId: 'nexus-credentials',
+                    groupId: 'in.javahome',
+                    nexusUrl: '43.201.101.185:8081',
+                    nexusVersion: 'nexus3',
+                    protocol: 'http',
+                    repository: 'chinna-app',
+                    version: versionNumber
+                }
+            }
+        }
+    }
 }
